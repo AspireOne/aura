@@ -10,12 +10,16 @@ from collections import deque
 import json
 from pathlib import Path
 
+# Base directory for all persistent data
+DATA_DIR = Path(".data")
+DATA_DIR.mkdir(exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('bot.log'),
+        logging.FileHandler(DATA_DIR / 'bot.log'),
         logging.StreamHandler()
     ]
 )
@@ -28,7 +32,7 @@ class ConversationManager:
         self.max_chars = max_chars
         self.expiry_hours = expiry_hours
         self.last_interaction = {}
-        self.storage_path = Path("conversations")
+        self.storage_path = DATA_DIR / "conversations"
         self.storage_path.mkdir(exist_ok=True)
         
         # Load existing conversations
@@ -142,7 +146,7 @@ class RateLimiter:
 
 class SystemPromptManager:
     def __init__(self):
-        self.file_path = Path("system_prompt.txt")
+        self.file_path = DATA_DIR / "system_prompt.txt"
         self.default_prompt = "You are a skibidi rizzler who is gooning in ohio and is talking in gen-z slang. You are talking with your friend in a discord chat. You shall not break character!"
         self.current_prompt = self.load_prompt()
 
