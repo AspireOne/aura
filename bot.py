@@ -144,10 +144,61 @@ class RateLimiter:
             self.rate_limits[user_id] = deque(maxlen=self.messages_per_minute)
         self.rate_limits[user_id].append(datetime.now())
 
+class ModelManager:
+    def __init__(self):
+        self.file_path = DATA_DIR / "model.txt"
+        self.default_model = "gpt-4o"
+        self.current_model = self.load_model()
+        
+    def load_model(self) -> str:
+        try:
+            return self.file_path.read_text().strip()
+        except FileNotFoundError:
+            self.save_model(self.default_model)
+            return self.default_model
+            
+    def save_model(self, model: str):
+        self.file_path.write_text(model)
+        self.current_model = model
+
+class ProviderManager:
+    def __init__(self):
+        self.file_path = DATA_DIR / "provider.txt"
+        self.current_provider = self.load_provider()
+        
+    def load_provider(self) -> str:
+        try:
+            provider = self.file_path.read_text().strip()
+            return provider if provider in ["openai", "openrouter"] else "openai"
+        except FileNotFoundError:
+            self.save_provider("openai")
+            return "openai"
+            
+    def save_provider(self, provider: str):
+        if provider not in ["openai", "openrouter"]:
+            raise ValueError("Invalid provider")
+        self.file_path.write_text(provider)
+        self.current_provider = provider
+        
+    def get_client_config(self) -> dict:
+        if self.current_provider == "openai":
+            if not os.getenv('OPENAI_API_KEY'):
+                raise ValueError("OPENAI_API_KEY not found in environment")
+            return {
+                "api_key": os.getenv('OPENAI_API_KEY')
+            }
+        else:  # openrouter
+            if not os.getenv('OPENROUTER_API_KEY'):
+                raise ValueError("OPENROUTER_API_KEY not found in environment")
+            return {
+                "api_key": os.getenv('OPENROUTER_API_KEY'),
+                "base_url": "https://openrouter.ai/api/v1"
+            }
+
 class SystemPromptManager:
     def __init__(self):
         self.file_path = DATA_DIR / "system_prompt.txt"
-        self.default_prompt = "You are a skibidi rizzler who is gooning in ohio and is talking in gen-z slang. You are talking with your friend in a discord chat. You shall not break character!"
+        self.default_prompt = "You are a cute girl chatting with your friend on discord. For context, you play VRChat together sometimes, both like anime, and both are kind."
         self.current_prompt = self.load_prompt()
 
     def load_prompt(self) -> str:
@@ -169,7 +220,7 @@ class AICompanion(discord.Client):
         logging.info(f'Logged in as {self.user.name}')
         await self.change_presence(activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name="DMs | /prompt to customize"
+            name="DMs | /info (current settings), /prompt (customize system prompt)"
         ))
 
     async def process_message(self, message_content: str, conversation_history: list) -> str:
@@ -177,11 +228,10 @@ class AICompanion(discord.Client):
             messages = [{"role": "system", "content": self.prompt_manager.current_prompt}] + conversation_history
             
             response = await self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=self.model_manager.current_model,
                 messages=messages,
-                max_tokens=1000,
-                temperature=0.7,
-                presence_penalty=0.6
+                max_tokens=4000,
+                temperature=0.9,
             )
             
             return response.choices[0].message.content
@@ -246,9 +296,14 @@ class AICompanion(discord.Client):
         super().__init__(intents=intents)
         
         self.tree = discord.app_commands.CommandTree(self)
-        self.openai_client = AsyncOpenAI(
-            api_key=os.getenv('OPENAI_API_KEY')
-        )
+        self.model_manager = ModelManager()
+        self.provider_manager = ProviderManager()
+        try:
+            config = self.provider_manager.get_client_config()
+            self.openai_client = AsyncOpenAI(**config)
+        except ValueError as e:
+            logging.error(f"Error initializing AI client: {str(e)}")
+            self.openai_client = None
         self.conversation_manager = ConversationManager()
         self.rate_limiter = RateLimiter()
         self.prompt_manager = SystemPromptManager()
@@ -303,7 +358,9 @@ class AICompanion(discord.Client):
                     "**Conversation Statistics**\n"
                     f"Messages in history: {stats['message_count']}\n"
                     f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
-                    f"Current system prompt: {self.prompt_manager.current_prompt}\n"
+                    f"System prompt: {self.prompt_manager.current_prompt}\n"
+                    f"Provider: {self.provider_manager.current_provider}\n"
+                    f"Model: {self.model_manager.current_model}\n"
                 )
                 
                 if stats['last_interaction']:
@@ -314,6 +371,53 @@ class AICompanion(discord.Client):
             except Exception as e:
                 logging.error(f"Error showing info: {str(e)}")
                 await interaction.response.send_message("An error occurred while getting information. Please try again.", ephemeral=True)
+
+        @self.tree.command(name="provider", description="Set the AI provider (openai/openrouter)")
+        async def set_provider(interaction: discord.Interaction, provider: str):
+            if not isinstance(interaction.channel, discord.DMChannel):
+                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
+                return
+                
+            try:
+                provider = provider.lower()
+                if provider not in ["openai", "openrouter"]:
+                    await interaction.response.send_message("Invalid provider! Use 'openai' or 'openrouter'.", ephemeral=True)
+                    return
+                
+                # Check if API key exists
+                if provider == "openai" and not os.getenv('OPENAI_API_KEY'):
+                    await interaction.response.send_message("OPENAI_API_KEY not found in environment!", ephemeral=True)
+                    return
+                elif provider == "openrouter" and not os.getenv('OPENROUTER_API_KEY'):
+                    await interaction.response.send_message("OPENROUTER_API_KEY not found in environment!", ephemeral=True)
+                    return
+                
+                self.provider_manager.save_provider(provider)
+                config = self.provider_manager.get_client_config()
+                self.openai_client = AsyncOpenAI(**config)
+                await interaction.response.send_message(f"AI provider updated to {provider}!")
+                
+            except Exception as e:
+                logging.error(f"Error setting provider: {str(e)}")
+                await interaction.response.send_message("An error occurred while updating the provider. Please try again.", ephemeral=True)
+
+        @self.tree.command(name="model", description="Set the AI model to use")
+        async def set_model(interaction: discord.Interaction, model: str):
+            if not isinstance(interaction.channel, discord.DMChannel):
+                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
+                return
+                
+            try:
+                if len(model.strip()) == 0:
+                    await interaction.response.send_message("Model name cannot be empty!", ephemeral=True)
+                    return
+                    
+                self.model_manager.save_model(model)
+                await interaction.response.send_message(f"AI model updated to {model}!")
+                
+            except Exception as e:
+                logging.error(f"Error setting model: {str(e)}")
+                await interaction.response.send_message("An error occurred while updating the model. Please try again.", ephemeral=True)
 
         @self.tree.command(name="setlimit", description="Set maximum number of characters to keep in history")
         async def set_limit(interaction: discord.Interaction, max_chars: int):
