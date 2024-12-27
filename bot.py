@@ -258,14 +258,11 @@ class SystemPromptManager:
         self.prompts[user_id] = prompt
 
 class AICompanion(discord.Client):
-    async def setup_hook(self):
-        await self.tree.sync()
-
     async def on_ready(self):
         logging.info(f'Logged in as {self.user.name}')
         await self.change_presence(activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name="DMs | try /info or /prompt"
+            name="DMs | try !help"
         ))
 
     async def process_message(self, message_content: str, conversation_history: list, user_id: str) -> str:
@@ -303,11 +300,136 @@ class AICompanion(discord.Client):
             raise
 
     async def on_message(self, message):
-        if message.author.bot or not isinstance(message.channel, discord.DMChannel):
+        if message.author.bot:
             return
-        
-        # Don't process slash commands here
-        if message.content.startswith('/'):
+            
+        if not isinstance(message.channel, discord.DMChannel):
+            return
+            
+        # Handle commands
+        if message.content.startswith('!'):
+            cmd = message.content[1:].split()[0].lower()
+            args = message.content.split()[1:]
+            
+            if cmd == 'prompt':
+                if not args:
+                    await message.channel.send("Please provide a new prompt!")
+                    return
+                new_prompt = ' '.join(args)
+                if len(new_prompt) > 1000:
+                    await message.channel.send("Prompt is too long! Please keep it under 1000 characters.")
+                    return
+                if len(new_prompt.strip()) == 0:
+                    await message.channel.send("Prompt cannot be empty!")
+                    return
+                try:
+                    self.prompt_manager.save_prompt(str(message.author.id), new_prompt)
+                    await message.channel.send("System prompt updated! Conversation will continue with the new prompt.")
+                except Exception as e:
+                    logging.error(f"Error setting prompt: {str(e)}")
+                    await message.channel.send("An error occurred while setting the prompt. Please try again.")
+                return
+                
+            elif cmd == 'clear':
+                try:
+                    self.conversation_manager.delete_conversation(str(message.author.id))
+                    await message.channel.send("Conversation history cleared!")
+                except Exception as e:
+                    logging.error(f"Error clearing history: {str(e)}")
+                    await message.channel.send("An error occurred while clearing history. Please try again.")
+                return
+                
+            elif cmd == 'info':
+                try:
+                    user_id = str(message.author.id)
+                    stats = self.conversation_manager.get_stats(user_id)
+                    info_message = (
+                        "**Conversation Statistics**\n"
+                        f"Messages in history: {stats['message_count']}\n"
+                        f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
+                        f"System prompt: {self.prompt_manager.get_prompt(user_id)}\n"
+                        f"Provider: {self.provider_manager.get_provider(user_id)}\n"
+                        f"Model: {self.model_manager.get_model(user_id)}\n"
+                    )
+                    if stats['last_interaction']:
+                        last_time = datetime.fromisoformat(stats['last_interaction'])
+                        info_message += f"Last interaction: {last_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    await message.channel.send(info_message)
+                except Exception as e:
+                    logging.error(f"Error showing info: {str(e)}")
+                    await message.channel.send("An error occurred while getting information. Please try again.")
+                return
+                
+            elif cmd == 'provider':
+                if not args:
+                    await message.channel.send("Please specify a provider (openai/openrouter)!")
+                    return
+                provider = args[0].lower()
+                if provider not in ["openai", "openrouter"]:
+                    await message.channel.send("Invalid provider! Use 'openai' or 'openrouter'.")
+                    return
+                try:
+                    if provider == "openai" and not os.getenv('OPENAI_API_KEY'):
+                        await message.channel.send("OPENAI_API_KEY not found in environment!")
+                        return
+                    elif provider == "openrouter" and not os.getenv('OPENROUTER_API_KEY'):
+                        await message.channel.send("OPENROUTER_API_KEY not found in environment!")
+                        return
+                    self.provider_manager.save_provider(str(message.author.id), provider)
+                    await message.channel.send(f"AI provider updated to {provider}!")
+                except Exception as e:
+                    logging.error(f"Error setting provider: {str(e)}")
+                    await message.channel.send("An error occurred while updating the provider. Please try again.")
+                return
+                
+            elif cmd == 'model':
+                if not args:
+                    await message.channel.send("Please specify a model!")
+                    return
+                model = args[0]
+                try:
+                    self.model_manager.save_model(str(message.author.id), model)
+                    await message.channel.send(f"AI model updated to {model}!")
+                except Exception as e:
+                    logging.error(f"Error setting model: {str(e)}")
+                    await message.channel.send("An error occurred while updating the model. Please try again.")
+                return
+                
+            elif cmd == 'setlimit':
+                if not args:
+                    await message.channel.send("Please specify the maximum number of characters!")
+                    return
+                try:
+                    max_chars = int(args[0])
+                    if max_chars < 1000:
+                        await message.channel.send("Maximum characters must be at least 1000!")
+                        return
+                    if max_chars > 150000:
+                        await message.channel.send("Maximum characters cannot exceed 150,000!")
+                        return
+                    self.conversation_manager.set_max_chars(max_chars)
+                    await message.channel.send(f"Maximum conversation history updated to {max_chars:,} characters!")
+                except ValueError:
+                    await message.channel.send("Please provide a valid number!")
+                except Exception as e:
+                    logging.error(f"Error setting character limit: {str(e)}")
+                    await message.channel.send("An error occurred while updating the character limit. Please try again.")
+                return
+                
+            elif cmd == 'help':
+                help_text = """
+**Available Commands:**
+!prompt <new prompt> - Set a new system prompt
+!clear - Clear conversation history
+!info - Show conversation statistics
+!provider <openai/openrouter> - Set AI provider
+!model <model name> - Set AI model
+!setlimit <number> - Set max history characters
+!help - Show this help message
+"""
+                await message.channel.send(help_text)
+                return
+                
             return
         
         user_id = str(message.author.id)
@@ -379,7 +501,6 @@ class AICompanion(discord.Client):
         
         super().__init__(intents=intents)
         
-        self.tree = discord.app_commands.CommandTree(self)
         self.model_manager = ModelManager()
         self.provider_manager = ProviderManager()
         try:
@@ -392,139 +513,6 @@ class AICompanion(discord.Client):
         self.rate_limiter = RateLimiter()
         self.prompt_manager = SystemPromptManager()
 
-        # Register slash commands
-        @self.tree.command(name="prompt", description="Set a new system prompt for the AI")
-        async def set_prompt(interaction: discord.Interaction, new_prompt: str):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-
-            try:
-                if len(new_prompt) > 1000:
-                    await interaction.response.send_message("Prompt is too long! Please keep it under 1000 characters.", ephemeral=True)
-                    return
-                    
-                if len(new_prompt.strip()) == 0:
-                    await interaction.response.send_message("Prompt cannot be empty!", ephemeral=True)
-                    return
-                    
-                user_id = str(interaction.user.id)
-                self.prompt_manager.save_prompt(user_id, new_prompt)
-                await interaction.response.send_message("System prompt updated! Conversation will continue with the new prompt.")
-            except Exception as e:
-                logging.error(f"Error setting prompt: {str(e)}")
-                await interaction.response.send_message("An error occurred while setting the prompt. Please try again.", ephemeral=True)
-
-        @self.tree.command(name="clear", description="Clear your conversation history")
-        async def clear_history(interaction: discord.Interaction):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-                
-            try:
-                user_id = str(interaction.user.id)
-                self.conversation_manager.delete_conversation(user_id)
-                await interaction.response.send_message("Conversation history cleared!")
-            except Exception as e:
-                logging.error(f"Error clearing history: {str(e)}")
-                await interaction.response.send_message("An error occurred while clearing history. Please try again.", ephemeral=True)
-
-        @self.tree.command(name="info", description="Show current conversation statistics")
-        async def show_info(interaction: discord.Interaction):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-                
-            try:
-                user_id = str(interaction.user.id)
-                stats = self.conversation_manager.get_stats(user_id)
-                
-                info_message = (
-                    "**Conversation Statistics**\n"
-                    f"Messages in history: {stats['message_count']}\n"
-                    f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
-                    f"System prompt: {self.prompt_manager.get_prompt(user_id)}\n"
-                    f"Provider: {self.provider_manager.get_provider(user_id)}\n"
-                    f"Model: {self.model_manager.get_model(user_id)}\n"
-                )
-                
-                if stats['last_interaction']:
-                    last_time = datetime.fromisoformat(stats['last_interaction'])
-                    info_message += f"Last interaction: {last_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                
-                await interaction.response.send_message(info_message)
-            except Exception as e:
-                logging.error(f"Error showing info: {str(e)}")
-                await interaction.response.send_message("An error occurred while getting information. Please try again.", ephemeral=True)
-
-        @self.tree.command(name="provider", description="Set the AI provider (openai/openrouter)")
-        async def set_provider(interaction: discord.Interaction, provider: str):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-                
-            try:
-                provider = provider.lower()
-                if provider not in ["openai", "openrouter"]:
-                    await interaction.response.send_message("Invalid provider! Use 'openai' or 'openrouter'.", ephemeral=True)
-                    return
-                
-                # Check if API key exists
-                if provider == "openai" and not os.getenv('OPENAI_API_KEY'):
-                    await interaction.response.send_message("OPENAI_API_KEY not found in environment!", ephemeral=True)
-                    return
-                elif provider == "openrouter" and not os.getenv('OPENROUTER_API_KEY'):
-                    await interaction.response.send_message("OPENROUTER_API_KEY not found in environment!", ephemeral=True)
-                    return
-                
-                user_id = str(interaction.user.id)
-                self.provider_manager.save_provider(user_id, provider)
-                # Update client only for this user's messages
-                await interaction.response.send_message(f"AI provider updated to {provider}!")
-                
-            except Exception as e:
-                logging.error(f"Error setting provider: {str(e)}")
-                await interaction.response.send_message("An error occurred while updating the provider. Please try again.", ephemeral=True)
-
-        @self.tree.command(name="model", description="Set the AI model to use")
-        async def set_model(interaction: discord.Interaction, model: str):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-                
-            try:
-                if len(model.strip()) == 0:
-                    await interaction.response.send_message("Model name cannot be empty!", ephemeral=True)
-                    return
-                    
-                user_id = str(interaction.user.id)
-                self.model_manager.save_model(user_id, model)
-                await interaction.response.send_message(f"AI model updated to {model}!")
-                
-            except Exception as e:
-                logging.error(f"Error setting model: {str(e)}")
-                await interaction.response.send_message("An error occurred while updating the model. Please try again.", ephemeral=True)
-
-        @self.tree.command(name="setlimit", description="Set maximum number of characters to keep in history")
-        async def set_limit(interaction: discord.Interaction, max_chars: int):
-            if not isinstance(interaction.channel, discord.DMChannel):
-                await interaction.response.send_message("This command can only be used in DMs!", ephemeral=True)
-                return
-                
-            try:
-                if max_chars < 1000:  # Minimum reasonable limit
-                    await interaction.response.send_message("Maximum characters must be at least 1000!", ephemeral=True)
-                    return
-                    
-                if max_chars > 150000:  # Reasonable upper limit
-                    await interaction.response.send_message("Maximum characters cannot exceed 150,000!", ephemeral=True)
-                    return
-                    
-                self.conversation_manager.set_max_chars(max_chars)
-                await interaction.response.send_message(f"Maximum conversation history updated to {max_chars:,} characters!")
-            except Exception as e:
-                logging.error(f"Error setting character limit: {str(e)}")
-                await interaction.response.send_message("An error occurred while updating the character limit. Please try again.", ephemeral=True)
 
 if __name__ == "__main__":
     client = AICompanion()
