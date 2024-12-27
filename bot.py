@@ -245,7 +245,7 @@ class AICompanion(discord.Client):
         logging.info(f'Logged in as {self.user.name}')
         await self.change_presence(activity=discord.Activity(
             type=discord.ActivityType.listening,
-            name="DMs | /info (current settings), /prompt (customize system prompt)"
+            name="DMs | try /info or /prompt"
         ))
 
     async def process_message(self, message_content: str, conversation_history: list, user_id: str) -> str:
