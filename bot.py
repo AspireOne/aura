@@ -146,42 +146,59 @@ class RateLimiter:
 
 class ModelManager:
     def __init__(self):
-        self.file_path = DATA_DIR / "model.txt"
+        self.storage_path = DATA_DIR / "models"
+        self.storage_path.mkdir(exist_ok=True)
         self.default_model = "gpt-4o"
-        self.current_model = self.load_model()
+        self.models = {}
         
-    def load_model(self) -> str:
+    def get_model(self, user_id: str) -> str:
+        if user_id not in self.models:
+            self.models[user_id] = self.load_model(user_id)
+        return self.models[user_id]
+        
+    def load_model(self, user_id: str) -> str:
+        file_path = self.storage_path / f"{user_id}.txt"
         try:
-            return self.file_path.read_text().strip()
+            return file_path.read_text().strip()
         except FileNotFoundError:
-            self.save_model(self.default_model)
+            self.save_model(user_id, self.default_model)
             return self.default_model
             
-    def save_model(self, model: str):
-        self.file_path.write_text(model)
-        self.current_model = model
+    def save_model(self, user_id: str, model: str):
+        file_path = self.storage_path / f"{user_id}.txt"
+        file_path.write_text(model)
+        self.models[user_id] = model
 
 class ProviderManager:
     def __init__(self):
-        self.file_path = DATA_DIR / "provider.txt"
-        self.current_provider = self.load_provider()
+        self.storage_path = DATA_DIR / "providers"
+        self.storage_path.mkdir(exist_ok=True)
+        self.providers = {}
         
-    def load_provider(self) -> str:
+    def get_provider(self, user_id: str) -> str:
+        if user_id not in self.providers:
+            self.providers[user_id] = self.load_provider(user_id)
+        return self.providers[user_id]
+        
+    def load_provider(self, user_id: str) -> str:
+        file_path = self.storage_path / f"{user_id}.txt"
         try:
-            provider = self.file_path.read_text().strip()
+            provider = file_path.read_text().strip()
             return provider if provider in ["openai", "openrouter"] else "openai"
         except FileNotFoundError:
-            self.save_provider("openai")
+            self.save_provider(user_id, "openai")
             return "openai"
             
-    def save_provider(self, provider: str):
+    def save_provider(self, user_id: str, provider: str):
         if provider not in ["openai", "openrouter"]:
             raise ValueError("Invalid provider")
-        self.file_path.write_text(provider)
-        self.current_provider = provider
+        file_path = self.storage_path / f"{user_id}.txt"
+        file_path.write_text(provider)
+        self.providers[user_id] = provider
         
-    def get_client_config(self) -> dict:
-        if self.current_provider == "openai":
+    def get_client_config(self, user_id: str) -> dict:
+        provider = self.get_provider(user_id)
+        if provider == "openai":
             if not os.getenv('OPENAI_API_KEY'):
                 raise ValueError("OPENAI_API_KEY not found in environment")
             return {
@@ -197,20 +214,28 @@ class ProviderManager:
 
 class SystemPromptManager:
     def __init__(self):
-        self.file_path = DATA_DIR / "system_prompt.txt"
+        self.storage_path = DATA_DIR / "prompts"
+        self.storage_path.mkdir(exist_ok=True)
         self.default_prompt = "You are a cute girl chatting with your friend on discord. For context, you play VRChat together sometimes, both like anime, and both are kind."
-        self.current_prompt = self.load_prompt()
+        self.prompts = {}
 
-    def load_prompt(self) -> str:
+    def get_prompt(self, user_id: str) -> str:
+        if user_id not in self.prompts:
+            self.prompts[user_id] = self.load_prompt(user_id)
+        return self.prompts[user_id]
+
+    def load_prompt(self, user_id: str) -> str:
+        file_path = self.storage_path / f"{user_id}.txt"
         try:
-            return self.file_path.read_text().strip()
+            return file_path.read_text().strip()
         except FileNotFoundError:
-            self.save_prompt(self.default_prompt)
+            self.save_prompt(user_id, self.default_prompt)
             return self.default_prompt
 
-    def save_prompt(self, prompt: str):
-        self.file_path.write_text(prompt)
-        self.current_prompt = prompt
+    def save_prompt(self, user_id: str, prompt: str):
+        file_path = self.storage_path / f"{user_id}.txt"
+        file_path.write_text(prompt)
+        self.prompts[user_id] = prompt
 
 class AICompanion(discord.Client):
     async def setup_hook(self):
@@ -223,12 +248,16 @@ class AICompanion(discord.Client):
             name="DMs | /info (current settings), /prompt (customize system prompt)"
         ))
 
-    async def process_message(self, message_content: str, conversation_history: list) -> str:
+    async def process_message(self, message_content: str, conversation_history: list, user_id: str) -> str:
         try:
-            messages = [{"role": "system", "content": self.prompt_manager.current_prompt}] + conversation_history
+            # Get user-specific configuration
+            config = self.provider_manager.get_client_config(user_id)
+            client = AsyncOpenAI(**config)
             
-            response = await self.openai_client.chat.completions.create(
-                model=self.model_manager.current_model,
+            messages = [{"role": "system", "content": self.prompt_manager.get_prompt(user_id)}] + conversation_history
+            
+            response = await client.chat.completions.create(
+                model=self.model_manager.get_model(user_id),
                 messages=messages,
                 max_tokens=4000,
                 temperature=0.9,
@@ -267,7 +296,8 @@ class AICompanion(discord.Client):
             async with message.channel.typing():
                 ai_response = await self.process_message(
                     message.content,
-                    self.conversation_manager.get_conversation(user_id)
+                    self.conversation_manager.get_conversation(user_id),
+                    user_id
                 )
 
             # Split long responses
@@ -299,8 +329,8 @@ class AICompanion(discord.Client):
         self.model_manager = ModelManager()
         self.provider_manager = ProviderManager()
         try:
-            config = self.provider_manager.get_client_config()
-            self.openai_client = AsyncOpenAI(**config)
+            # No need to initialize a default client since we create per-user clients
+            self.openai_client = None
         except ValueError as e:
             logging.error(f"Error initializing AI client: {str(e)}")
             self.openai_client = None
@@ -324,7 +354,8 @@ class AICompanion(discord.Client):
                     await interaction.response.send_message("Prompt cannot be empty!", ephemeral=True)
                     return
                     
-                self.prompt_manager.save_prompt(new_prompt)
+                user_id = str(interaction.user.id)
+                self.prompt_manager.save_prompt(user_id, new_prompt)
                 await interaction.response.send_message("System prompt updated! Conversation will continue with the new prompt.")
             except Exception as e:
                 logging.error(f"Error setting prompt: {str(e)}")
@@ -358,9 +389,9 @@ class AICompanion(discord.Client):
                     "**Conversation Statistics**\n"
                     f"Messages in history: {stats['message_count']}\n"
                     f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
-                    f"System prompt: {self.prompt_manager.current_prompt}\n"
-                    f"Provider: {self.provider_manager.current_provider}\n"
-                    f"Model: {self.model_manager.current_model}\n"
+                    f"System prompt: {self.prompt_manager.get_prompt(user_id)}\n"
+                    f"Provider: {self.provider_manager.get_provider(user_id)}\n"
+                    f"Model: {self.model_manager.get_model(user_id)}\n"
                 )
                 
                 if stats['last_interaction']:
@@ -392,9 +423,9 @@ class AICompanion(discord.Client):
                     await interaction.response.send_message("OPENROUTER_API_KEY not found in environment!", ephemeral=True)
                     return
                 
-                self.provider_manager.save_provider(provider)
-                config = self.provider_manager.get_client_config()
-                self.openai_client = AsyncOpenAI(**config)
+                user_id = str(interaction.user.id)
+                self.provider_manager.save_provider(user_id, provider)
+                # Update client only for this user's messages
                 await interaction.response.send_message(f"AI provider updated to {provider}!")
                 
             except Exception as e:
@@ -412,7 +443,8 @@ class AICompanion(discord.Client):
                     await interaction.response.send_message("Model name cannot be empty!", ephemeral=True)
                     return
                     
-                self.model_manager.save_model(model)
+                user_id = str(interaction.user.id)
+                self.model_manager.save_model(user_id, model)
                 await interaction.response.send_message(f"AI model updated to {model}!")
                 
             except Exception as e:
