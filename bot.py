@@ -168,7 +168,7 @@ class ModelManager:
     def __init__(self):
         self.storage_path = DATA_DIR / "models"
         self.storage_path.mkdir(exist_ok=True)
-        self.default_model = "gpt-4o"
+        self.default_model = "anthropic/claude-3.5-sonnet" if os.getenv('OPENROUTER_API_KEY') else "gpt-4o"
         self.models = {}
         
     def get_model(self, user_id: str) -> str:
@@ -194,6 +194,7 @@ class ProviderManager:
         self.storage_path = DATA_DIR / "providers"
         self.storage_path.mkdir(exist_ok=True)
         self.providers = {}
+        self.default_provider = "openrouter" if os.getenv('OPENROUTER_API_KEY') else "openai"
         
     def get_provider(self, user_id: str) -> str:
         if user_id not in self.providers:
@@ -204,10 +205,10 @@ class ProviderManager:
         file_path = self.storage_path / f"{user_id}.txt"
         try:
             provider = file_path.read_text().strip()
-            return provider if provider in ["openai", "openrouter"] else "openai"
+            return provider if provider in ["openai", "openrouter"] else self.default_provider
         except FileNotFoundError:
-            self.save_provider(user_id, "openai")
-            return "openai"
+            self.save_provider(user_id, self.default_provider)
+            return self.default_provider
             
     def save_provider(self, user_id: str, provider: str):
         if provider not in ["openai", "openrouter"]:
