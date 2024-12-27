@@ -10,7 +10,7 @@ A Discord bot that uses a LLM to provide conversational AI interactions in DMs. 
 - Rate limiting to prevent abuse
 - Automatic conversation expiry
 - Character-based history limiting
-- Slash commands for configuration
+- Simple ! commands for configuration
 - More - this guide was written after 20 minutes of development, lol.
 
 ## Prerequisites
@@ -33,7 +33,6 @@ A Discord bot that uses a LLM to provide conversational AI interactions in DMs. 
    - Select "bot" under Scopes
    - Select these permissions:
      - Send Messages
-     - Use Slash Commands
      - Add Reactions
      - Read Message History
 5. Copy the generated URL and use it to invite the bot to your server
@@ -82,14 +81,17 @@ A Discord bot that uses a LLM to provide conversational AI interactions in DMs. 
 
 ## Usage
 
-The bot only responds in DMs. Start a conversation by sending a direct message to the bot.
+The bot responds in DMs. Start a conversation by sending a direct message to the bot.
 
 ### Available Commands
 
-- `/prompt <new_prompt>` - Set a new system prompt for the AI's personality
-- `/clear` - Clear your conversation history
-- `/info` - Show current conversation statistics
-- `/setlimit <max_chars>` - Set maximum number of characters to keep in history
+- `!prompt <new_prompt>` - Set a new system prompt for the AI's personality
+- `!clear` - Clear your conversation history
+- `!info` - Show current conversation statistics
+- `!setlimit <max_chars>` - Set maximum number of characters to keep in history
+- `!provider <openai/openrouter>` - Set AI provider
+- `!model <model name>` - Set AI model
+- `!help` - Show help message
 
 ## Configuration
 
@@ -102,10 +104,13 @@ The bot has several configurable parameters in `bot.py`:
 ## Data Storage
 
 The bot stores all persistent data in the `.data` directory:
-- `.data/conversations/` - Conversation histories
-- `.data/system_prompt.txt` - Current system prompt
+- `.data/conversations/` - Conversation histories (JSON files)
+- `.data/prompts/` - User-specific system prompts
+- `.data/providers/` - User-specific AI provider settings
+- `.data/models/` - User-specific AI model settings
 - `.data/bot.log` - Log files
-- might change at any point in time without this guide being updates
+
+Each user's data is stored separately using their Discord ID as the filename.
 
 ## License
 
