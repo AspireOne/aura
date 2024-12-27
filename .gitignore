@@ -4,3 +4,4 @@ bot.log
 system_prompt.txt
 memory
 conversations/
+.data/
