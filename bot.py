@@ -88,7 +88,17 @@ class ConversationManager:
         self.last_interaction[user_id] = current_time
         
         # Check total character count and trim if necessary
-        total_chars = sum(len(msg["content"]) for msg in self.conversations[user_id])
+        total_chars = 0
+        for msg in self.conversations[user_id]:
+            if isinstance(msg["content"], list):
+                # Count text and images in mixed content
+                for item in msg["content"]:
+                    if item["type"] == "image_url":
+                        total_chars += 3000  # Count each image as 3000 chars
+                    else:
+                        total_chars += len(item["text"])
+            else:
+                total_chars += len(msg["content"])
         while total_chars > self.max_chars and len(self.conversations[user_id]) > 1:
             removed_msg = self.conversations[user_id].popleft()
             total_chars -= len(removed_msg["content"])
@@ -112,7 +122,17 @@ class ConversationManager:
         
     def get_stats(self, user_id: str) -> dict:
         conversation = self.conversations.get(user_id, deque())
-        total_chars = sum(len(msg["content"]) for msg in conversation)
+        total_chars = 0
+        for msg in conversation:
+            if isinstance(msg["content"], list):
+                # Count text and images in mixed content
+                for item in msg["content"]:
+                    if item["type"] == "image_url":
+                        total_chars += 3000  # Count each image as 3000 chars
+                    else:
+                        total_chars += len(item["text"])
+            else:
+                total_chars += len(msg["content"])
         message_count = len(conversation)
         last_interaction = self.last_interaction.get(user_id)
         
@@ -256,9 +276,22 @@ class AICompanion(discord.Client):
             
             messages = [{"role": "system", "content": self.prompt_manager.get_prompt(user_id)}] + conversation_history
             
+            # Prepare messages for the API
+            api_messages = []
+            for msg in messages:
+                if isinstance(msg["content"], list):
+                    # Message with images/mixed content
+                    api_messages.append(msg)
+                else:
+                    # Regular text message
+                    api_messages.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+
             response = await client.chat.completions.create(
                 model=self.model_manager.get_model(user_id),
-                messages=messages,
+                messages=api_messages,
                 max_tokens=4000,
                 temperature=0.9,
             )
@@ -286,10 +319,31 @@ class AICompanion(discord.Client):
             
         self.rate_limiter.add_message(user_id)
 
+        # Handle message content
+        if message.attachments and any(att.content_type.startswith('image/') for att in message.attachments):
+            # If there are images, create a content array
+            content = []
+            # Add any text message first if it exists
+            if message.content.strip():
+                content.append({"type": "text", "text": message.content.strip()})
+            # Add each image
+            for attachment in message.attachments:
+                if attachment.content_type.startswith('image/'):
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "detail": "high",
+                            "url": attachment.url,
+                        },
+                    })
+        else:
+            # Regular text message
+            content = message.content
+
         # Add user message to conversation
         self.conversation_manager.add_message(
             user_id,
-            {"role": "user", "content": message.content}
+            {"role": "user", "content": content}
         )
 
         try:
