@@ -162,21 +162,6 @@ class SystemPromptManager:
         self.current_prompt = prompt
 
 class AICompanion(discord.Client):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.dm_messages = True
-        
-        super().__init__(intents=intents)
-        
-        self.tree = discord.app_commands.CommandTree(self)
-        self.openai_client = AsyncOpenAI(
-            api_key=os.getenv('OPENAI_API_KEY')
-        )
-        self.conversation_manager = ConversationManager()
-        self.rate_limiter = RateLimiter()
-        self.prompt_manager = SystemPromptManager()
-
     async def setup_hook(self):
         await self.tree.sync()
 
