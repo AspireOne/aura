@@ -27,7 +27,7 @@ logging.basicConfig(
 load_dotenv()
 
 class ConversationManager:
-    def __init__(self, expiry_hours=24, max_chars=120000):
+    def __init__(self, expiry_hours=3600, max_chars=120000):
         self.conversations = {}
         self.max_chars = max_chars
         self.expiry_hours = expiry_hours
@@ -144,7 +144,7 @@ class ConversationManager:
         }
 
 class RateLimiter:
-    def __init__(self, messages_per_minute=5):
+    def __init__(self, messages_per_minute=7):
         self.rate_limits = {}
         self.messages_per_minute = messages_per_minute
 
