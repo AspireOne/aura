@@ -7,17 +7,21 @@ A Discord bot that uses a LLM to provide conversational AI interactions in both 
 - Private conversations in DMs
 - Conversation memory with configurable limits
 - Customizable AI personality through system prompts
-- Rate limiting to prevent abuse
-- Automatic conversation expiry
+- Rate limiting to prevent abuse (7 messages per minute)
+- Automatic conversation expiry after 3600 hours
 - Character-based history limiting
+- Image handling capabilities
 - Simple ! commands for configuration
-- More - this guide was written after 20 minutes of development, lol.
+- Channel message triggers:
+  - Messages starting with ? 
+  - Messages mentioning "auro"
+  - Messages ending with .
 
 ## Prerequisites
 
 - Python 3.8 or higher
 - A Discord account
-- An OpenAI API key
+- An OpenAI API key or OpenRouter API key
 
 ## Setup Instructions
 
@@ -71,7 +75,8 @@ A Discord bot that uses a LLM to provide conversational AI interactions in both 
 4. Create a `.env` file in the project root with your tokens:
    ```
    DISCORD_TOKEN=your_discord_bot_token_here
-   OPENAI_API_KEY=your_openai_api_key_here
+   OPENAI_API_KEY=your_openai_api_key_here  # Optional if using OpenRouter
+   OPENROUTER_API_KEY=your_openrouter_api_key_here  # Optional if using OpenAI
    ```
 
 5. Run the bot:
@@ -86,6 +91,7 @@ The bot responds in DMs. Start a conversation by sending a direct message to the
 ### Available Commands
 
 - `!prompt <new_prompt>` - Set a new system prompt for the AI's personality
+- `!clear-prompt` - Reset system prompt to default
 - `!clear` - Clear your conversation history
 - `!info` - Show current conversation statistics
 - `!setlimit <max_chars>` - Set maximum number of characters to keep in history
@@ -97,9 +103,9 @@ The bot responds in DMs. Start a conversation by sending a direct message to the
 
 The bot has several configurable parameters in `bot.py`:
 
-- `expiry_hours`: How long until conversations expire (default: 24 hours)
+- `expiry_hours`: How long until conversations expire (default: 3600 hours)
 - `max_chars`: Maximum characters in conversation history (default: 120,000)
-- `messages_per_minute`: Rate limit for messages (default: 5)
+- `messages_per_minute`: Rate limit for messages (default: 7)
 
 ## Data Storage
 
