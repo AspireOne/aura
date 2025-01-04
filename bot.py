@@ -367,7 +367,7 @@ class AICompanion(discord.Client):
                     # Clear the relevant conversation based on context
                     self.conversation_manager.delete_conversation(conversation_id)
                     await message.channel.send(self.message_formatter.system_message(
-                        f"System prompt updated and {'channel' if not is_dm else 'personal'} conversation history cleared!"))
+                        f"System prompt updated!"))
                 except Exception as e:
                     logging.error(f"Error setting prompt: {str(e)}")
                     await message.channel.send(self.message_formatter.system_message("An error occurred while setting the prompt. Please try again."))
