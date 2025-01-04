@@ -10,6 +10,12 @@ import logging
 from collections import deque
 import json
 from pathlib import Path
+import unicodedata
+
+def strip_diacritics(text):
+    """Remove diacritics from text, converting to ASCII equivalents"""
+    return ''.join(c for c in unicodedata.normalize('NFKD', text)
+                  if not unicodedata.combining(c))
 
 # Base directory for all persistent data
 DATA_DIR = Path(".data")
@@ -244,7 +250,7 @@ class SystemPromptManager:
     def __init__(self):
         self.storage_path = DATA_DIR / "prompts"
         self.storage_path.mkdir(exist_ok=True)
-        self.default_prompt = "Tvé jméno je Aura. Jsi součástí Discord chatu a jsi tu od toho, abys byla kawaii a pomáhala ostatním! Uvidíš celý Discord chat. Před každou zprávou je uživatelské jméno člověka, který danou zprávu napsal. Neprefixuj své zprávy svým jménem, to se dělá automaticky."
+        self.default_prompt = "Tvé jméno je Aura. Jsi součástí Discord chatu a jsi tu od toho, abys pomáhala ostatním! Povaha: jsi kawaii uwu discord holka. Technické info: Neprefixuj své zprávy žádným username nebo tagem!. A taky nepiš asterisky používané v 'roleplay'. Tohle je normální chat."
         self.prompts = {}
 
     def get_prompt(self, user_id: str) -> str:
@@ -273,7 +279,7 @@ class AICompanion(discord.Client):
             name="DMs | try !help"
         ))
 
-    async def process_message(self, message, conversation_history: list, user_id: str) -> str:
+    async def process_message(self, message, conversation_history: list, user_id: str, conversation_id: str) -> str:
         try:
             # Get user-specific configuration
             config = self.provider_manager.get_client_config(user_id)
@@ -283,7 +289,7 @@ class AICompanion(discord.Client):
             filtered_history = [msg for msg in conversation_history 
                               if not (isinstance(msg["content"], str) and "[SYS]" in msg["content"])]
             
-            messages = [{"role": "system", "content": self.prompt_manager.get_prompt(user_id)}] + filtered_history
+            messages = [{"role": "system", "content": self.prompt_manager.get_prompt(conversation_id)}] + filtered_history
             
             # Log the exact context being sent to the LLM
             logging.info("Context being sent to LLM:")
@@ -356,7 +362,8 @@ class AICompanion(discord.Client):
                     await message.channel.send(self.message_formatter.system_message("Prompt cannot be empty!"))
                     return
                 try:
-                    self.prompt_manager.save_prompt(str(message.author.id), new_prompt)
+                    # Use conversation_id for prompt storage to match channel/DM context
+                    self.prompt_manager.save_prompt(conversation_id, new_prompt)
                     # Clear the relevant conversation based on context
                     self.conversation_manager.delete_conversation(conversation_id)
                     await message.channel.send(self.message_formatter.system_message(
@@ -389,7 +396,7 @@ class AICompanion(discord.Client):
                         f"**{'Channel' if not is_dm else 'Personal'} Conversation Statistics**\n"
                         f"Messages in history: {stats['message_count']}\n"
                         f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
-                        f"System prompt: {self.prompt_manager.get_prompt(user_id)}\n"
+                        f"System prompt: {self.prompt_manager.get_prompt(conversation_id)}\n"
                         f"Provider: {self.provider_manager.get_provider(user_id)}\n"
                         f"Model: {self.model_manager.get_model(user_id)}\n"
                     )
@@ -458,10 +465,22 @@ class AICompanion(discord.Client):
                     await message.channel.send(self.message_formatter.system_message("An error occurred while updating the character limit. Please try again."))
                 return
                 
+            elif cmd == 'clear-prompt':
+                try:
+                    # Reset prompt to default for the conversation context
+                    self.prompt_manager.save_prompt(conversation_id, self.prompt_manager.default_prompt)
+                    await message.channel.send(self.message_formatter.system_message(
+                        f"{'Channel' if not is_dm else 'Personal'} system prompt reset to default!"))
+                except Exception as e:
+                    logging.error(f"Error clearing prompt: {str(e)}")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while clearing the prompt. Please try again."))
+                return
+
             elif cmd == 'help':
                 help_text = self.message_formatter.system_message("""
 **Available Commands:**
 !prompt <new prompt> - Set a new system prompt
+!clear-prompt - Reset system prompt to default
 !clear - Clear conversation history
 !info - Show conversation statistics
 !provider <openai/openrouter> - Set AI provider
@@ -568,7 +587,8 @@ class AICompanion(discord.Client):
                 ai_response = await self.process_message(
                     message,
                     self.conversation_manager.get_conversation(conversation_id),
-                    str(message.author.id)  # Still use actual user_id for model/provider settings
+                    str(message.author.id),  # Still use actual user_id for model/provider settings
+                    conversation_id  # Pass conversation_id for prompt lookup
                 )
             
                 # Strip bot's username prefix if present
@@ -580,6 +600,9 @@ class AICompanion(discord.Client):
                         if ai_response[closing_bracket + 1] == ':':
                             # Remove the [username]: prefix and any following whitespace
                             ai_response = ai_response[closing_bracket + 2:].lstrip()
+                        
+                # Strip diacritics from the response
+                ai_response = strip_diacritics(ai_response)
 
             # Split long responses
             if len(ai_response) > 2000:
