@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import discord
 from discord.ext import commands
@@ -19,8 +20,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(DATA_DIR / 'bot.log'),
-        logging.StreamHandler()
+        logging.FileHandler(DATA_DIR / 'bot.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 
@@ -233,11 +234,17 @@ class ProviderManager:
                 "base_url": "https://openrouter.ai/api/v1"
             }
 
+class MessageFormatter:
+    @staticmethod
+    def system_message(message: str) -> str:
+        """Format a system message with [SYS] prefix"""
+        return f"[SYS] {message}"
+
 class SystemPromptManager:
     def __init__(self):
         self.storage_path = DATA_DIR / "prompts"
         self.storage_path.mkdir(exist_ok=True)
-        self.default_prompt = "You are a cute girl chatting with your friend on discord. For context, you play VRChat together sometimes, both like anime, and both are kind."
+        self.default_prompt = "Tvé jméno je Aura. Jsi součástí Discord chatu a jsi tu od toho, abys byla kawaii a pomáhala ostatním! Uvidíš celý Discord chat. Před každou zprávou je uživatelské jméno člověka, který danou zprávu napsal. Neprefixuj své zprávy svým jménem, to se dělá automaticky."
         self.prompts = {}
 
     def get_prompt(self, user_id: str) -> str:
@@ -266,13 +273,21 @@ class AICompanion(discord.Client):
             name="DMs | try !help"
         ))
 
-    async def process_message(self, message_content: str, conversation_history: list, user_id: str) -> str:
+    async def process_message(self, message, conversation_history: list, user_id: str) -> str:
         try:
             # Get user-specific configuration
             config = self.provider_manager.get_client_config(user_id)
             client = AsyncOpenAI(**config)
             
-            messages = [{"role": "system", "content": self.prompt_manager.get_prompt(user_id)}] + conversation_history
+            # Filter out system messages and create the message list
+            filtered_history = [msg for msg in conversation_history 
+                              if not (isinstance(msg["content"], str) and "[SYS]" in msg["content"])]
+            
+            messages = [{"role": "system", "content": self.prompt_manager.get_prompt(user_id)}] + filtered_history
+            
+            # Log the exact context being sent to the LLM
+            logging.info("Context being sent to LLM:")
+            logging.info(json.dumps(messages, indent=2))
             
             # Prepare messages for the API
             api_messages = []
@@ -304,8 +319,25 @@ class AICompanion(discord.Client):
         if message.author.bot:
             return
             
-        if not isinstance(message.channel, discord.DMChannel):
+        # Handle DMs, messages starting with ? or !, or messages mentioning "aura"/"auro"
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_question = not is_dm and message.content.startswith('?')
+        is_command = not is_dm and message.content.startswith('!')
+        mentions_aura = not is_dm and ('aura' in message.content.lower() or 'auro' in message.content.lower())
+        
+        if not (is_dm or is_question or is_command or mentions_aura):
             return
+            
+        # Strip the ? prefix if it's a question
+        if is_question:
+            message.content = message.content[1:].strip()
+            
+        # Helper function to get consistent conversation ID
+        def get_conversation_id(message):
+            return str(message.author.id) if isinstance(message.channel, discord.DMChannel) else f"channel_{message.channel.id}"
+            
+        # Get the conversation ID (user_id for DMs, channel_id for text channels)
+        conversation_id = get_conversation_id(message)
             
         # Handle commands
         if message.content.startswith('!'):
@@ -314,38 +346,47 @@ class AICompanion(discord.Client):
             
             if cmd == 'prompt':
                 if not args:
-                    await message.channel.send("Please provide a new prompt!")
+                    await message.channel.send(self.message_formatter.system_message("Please provide a new prompt!"))
                     return
                 new_prompt = ' '.join(args)
                 if len(new_prompt) > 1000:
-                    await message.channel.send("Prompt is too long! Please keep it under 1000 characters.")
+                    await message.channel.send(self.message_formatter.system_message("Prompt is too long! Please keep it under 1000 characters."))
                     return
                 if len(new_prompt.strip()) == 0:
-                    await message.channel.send("Prompt cannot be empty!")
+                    await message.channel.send(self.message_formatter.system_message("Prompt cannot be empty!"))
                     return
                 try:
                     self.prompt_manager.save_prompt(str(message.author.id), new_prompt)
-                    await message.channel.send("System prompt updated! Conversation will continue with the new prompt.")
+                    # Clear the relevant conversation based on context
+                    self.conversation_manager.delete_conversation(conversation_id)
+                    await message.channel.send(self.message_formatter.system_message(
+                        f"System prompt updated and {'channel' if not is_dm else 'personal'} conversation history cleared!"))
                 except Exception as e:
                     logging.error(f"Error setting prompt: {str(e)}")
-                    await message.channel.send("An error occurred while setting the prompt. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while setting the prompt. Please try again."))
                 return
                 
             elif cmd == 'clear':
                 try:
-                    self.conversation_manager.delete_conversation(str(message.author.id))
-                    await message.channel.send("Conversation history cleared!")
+                    # Get the correct conversation ID based on context
+                    clear_id = get_conversation_id(message)
+                    # Clear the conversation
+                    self.conversation_manager.delete_conversation(clear_id)
+                    await message.channel.send(self.message_formatter.system_message(
+                        f"{'Channel' if not is_dm else 'Personal'} conversation history cleared!"))
+                    logging.info(f"Cleared conversation history for ID: {clear_id}")
                 except Exception as e:
                     logging.error(f"Error clearing history: {str(e)}")
-                    await message.channel.send("An error occurred while clearing history. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while clearing history. Please try again."))
                 return
                 
             elif cmd == 'info':
                 try:
                     user_id = str(message.author.id)
-                    stats = self.conversation_manager.get_stats(user_id)
+                    # Get stats for the relevant conversation context
+                    stats = self.conversation_manager.get_stats(conversation_id)
                     info_message = (
-                        "**Conversation Statistics**\n"
+                        f"**{'Channel' if not is_dm else 'Personal'} Conversation Statistics**\n"
                         f"Messages in history: {stats['message_count']}\n"
                         f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
                         f"System prompt: {self.prompt_manager.get_prompt(user_id)}\n"
@@ -358,67 +399,67 @@ class AICompanion(discord.Client):
                     await message.channel.send(info_message)
                 except Exception as e:
                     logging.error(f"Error showing info: {str(e)}")
-                    await message.channel.send("An error occurred while getting information. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while getting information. Please try again."))
                 return
                 
             elif cmd == 'provider':
                 if not args:
-                    await message.channel.send("Please specify a provider (openai/openrouter)!")
+                    await message.channel.send(self.message_formatter.system_message("Please specify a provider (openai/openrouter)!"))
                     return
                 provider = args[0].lower()
                 if provider not in ["openai", "openrouter"]:
-                    await message.channel.send("Invalid provider! Use 'openai' or 'openrouter'.")
+                    await message.channel.send(self.message_formatter.system_message("Invalid provider! Use 'openai' or 'openrouter'."))
                     return
                 try:
                     if provider == "openai" and not os.getenv('OPENAI_API_KEY'):
-                        await message.channel.send("OPENAI_API_KEY not found in environment!")
+                        await message.channel.send(self.message_formatter.system_message("OPENAI_API_KEY not found in environment!"))
                         return
                     elif provider == "openrouter" and not os.getenv('OPENROUTER_API_KEY'):
-                        await message.channel.send("OPENROUTER_API_KEY not found in environment!")
+                        await message.channel.send(self.message_formatter.system_message("OPENROUTER_API_KEY not found in environment!"))
                         return
                     self.provider_manager.save_provider(str(message.author.id), provider)
-                    await message.channel.send(f"AI provider updated to {provider}!")
+                    await message.channel.send(self.message_formatter.system_message(f"AI provider updated to {provider}!"))
                 except Exception as e:
                     logging.error(f"Error setting provider: {str(e)}")
-                    await message.channel.send("An error occurred while updating the provider. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while updating the provider. Please try again."))
                 return
                 
             elif cmd == 'model':
                 if not args:
-                    await message.channel.send("Please specify a model!")
+                    await message.channel.send(self.message_formatter.system_message("Please specify a model!"))
                     return
                 model = args[0]
                 try:
                     self.model_manager.save_model(str(message.author.id), model)
-                    await message.channel.send(f"AI model updated to {model}!")
+                    await message.channel.send(self.message_formatter.system_message(f"AI model updated to {model}!"))
                 except Exception as e:
                     logging.error(f"Error setting model: {str(e)}")
-                    await message.channel.send("An error occurred while updating the model. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while updating the model. Please try again."))
                 return
                 
             elif cmd == 'setlimit':
                 if not args:
-                    await message.channel.send("Please specify the maximum number of characters!")
+                    await message.channel.send(self.message_formatter.system_message("Please specify the maximum number of characters!"))
                     return
                 try:
                     max_chars = int(args[0])
                     if max_chars < 1000:
-                        await message.channel.send("Maximum characters must be at least 1000!")
+                        await message.channel.send(self.message_formatter.system_message("Maximum characters must be at least 1000!"))
                         return
                     if max_chars > 150000:
-                        await message.channel.send("Maximum characters cannot exceed 150,000!")
+                        await message.channel.send(self.message_formatter.system_message("Maximum characters cannot exceed 150,000!"))
                         return
                     self.conversation_manager.set_max_chars(max_chars)
-                    await message.channel.send(f"Maximum conversation history updated to {max_chars:,} characters!")
+                    await message.channel.send(self.message_formatter.system_message(f"Maximum conversation history updated to {max_chars:,} characters!"))
                 except ValueError:
-                    await message.channel.send("Please provide a valid number!")
+                    await message.channel.send(self.message_formatter.system_message("Please provide a valid number!"))
                 except Exception as e:
                     logging.error(f"Error setting character limit: {str(e)}")
-                    await message.channel.send("An error occurred while updating the character limit. Please try again.")
+                    await message.channel.send(self.message_formatter.system_message("An error occurred while updating the character limit. Please try again."))
                 return
                 
             elif cmd == 'help':
-                help_text = """
+                help_text = self.message_formatter.system_message("""
 **Available Commands:**
 !prompt <new prompt> - Set a new system prompt
 !clear - Clear conversation history
@@ -427,20 +468,65 @@ class AICompanion(discord.Client):
 !model <model name> - Set AI model
 !setlimit <number> - Set max history characters
 !help - Show this help message
-"""
+""")
                 await message.channel.send(help_text)
                 return
                 
             return
         
-        user_id = str(message.author.id)
-        
         # Check rate limit
-        if not self.rate_limiter.can_send(user_id):
-            await message.channel.send("Please wait a moment before sending another message.")
+        if not self.rate_limiter.can_send(conversation_id):
+            await message.channel.send(self.message_formatter.system_message("Please wait a moment before sending another message."))
             return
             
-        self.rate_limiter.add_message(user_id)
+        self.rate_limiter.add_message(conversation_id)
+
+        # If in a text channel, fetch message history
+        if not is_dm:
+            try:
+                # Get channel history up to max_chars limit
+                channel_history = []
+                total_chars = 0
+                max_history_chars = self.conversation_manager.max_chars - len(message.content)
+                
+                # Find the last !clear command
+                last_clear = None
+                async for msg in message.channel.history(limit=100, before=message):
+                    if msg.content.strip() == '!clear':
+                        last_clear = msg
+                        break
+
+                # Get messages after the last clear command, or all recent messages if no !clear found
+                history_query = {"limit": 100, "before": message, "oldest_first": True}
+                if last_clear:
+                    history_query["after"] = last_clear
+                
+                async for msg in message.channel.history(**history_query):
+                    content = msg.content
+                    if content.startswith('?'):
+                        content = content[1:].strip()
+                    
+                    # Calculate message size
+                    msg_size = len(content)
+                    if total_chars + msg_size > max_history_chars:
+                        break
+                        
+                    role = "assistant" if msg.author.id == self.user.id else "user"
+                    # Include username in content
+                    display_name = f"{msg.author.name}#{msg.author.discriminator}" if msg.author.discriminator != '0' else msg.author.name
+                    prefixed_content = f"[{display_name}]: {content}"
+                    channel_history.append({"role": role, "content": prefixed_content})
+                    total_chars += msg_size
+                
+                # Clear existing conversation
+                self.conversation_manager.delete_conversation(conversation_id)
+                
+                # Add channel history (already in chronological order)
+                for msg in channel_history:
+                    self.conversation_manager.add_message(conversation_id, msg)
+                    
+            except Exception as e:
+                logging.error(f"Error fetching channel history: {str(e)}")
 
         # Handle message content
         if message.attachments and any(att.content_type.startswith('image/') for att in message.attachments):
@@ -463,19 +549,37 @@ class AICompanion(discord.Client):
             # Regular text message
             content = message.content
 
-        # Add user message to conversation
+        # Add user message to conversation with username
+        display_name = f"{message.author.name}#{message.author.discriminator}" if message.author.discriminator != '0' else message.author.name
+        if isinstance(content, list):
+            # For messages with images, add username to the text portion if it exists
+            if content and content[0]["type"] == "text":
+                content[0]["text"] = f"[{display_name}]: {content[0]['text']}"
+        else:
+            content = f"[{display_name}]: {content}"
+            
         self.conversation_manager.add_message(
-            user_id,
+            conversation_id,
             {"role": "user", "content": content}
         )
 
         try:
             async with message.channel.typing():
                 ai_response = await self.process_message(
-                    message.content,
-                    self.conversation_manager.get_conversation(user_id),
-                    user_id
+                    message,
+                    self.conversation_manager.get_conversation(conversation_id),
+                    str(message.author.id)  # Still use actual user_id for model/provider settings
                 )
+            
+                # Strip bot's username prefix if present
+                ai_response = ai_response.lstrip()  # Remove leading whitespace
+                if ai_response.startswith('['):
+                    # Find the closing bracket and colon
+                    closing_bracket = ai_response.find(']')
+                    if closing_bracket != -1 and len(ai_response) > closing_bracket + 1:
+                        if ai_response[closing_bracket + 1] == ':':
+                            # Remove the [username]: prefix and any following whitespace
+                            ai_response = ai_response[closing_bracket + 2:].lstrip()
 
             # Split long responses
             if len(ai_response) > 2000:
@@ -487,13 +591,13 @@ class AICompanion(discord.Client):
 
             # Add AI response to conversation
             self.conversation_manager.add_message(
-                user_id,
+                conversation_id,
                 {"role": "assistant", "content": ai_response}
             )
 
         except Exception as e:
             logging.error(f"Error processing message: {str(e)}")
-            await message.channel.send("Sorry, I encountered an error. Please try again later.")
+            await message.channel.send(self.message_formatter.system_message("Sorry, I encountered an error. Please try again later."))
 
     def __init__(self):
         intents = discord.Intents.default()
@@ -512,6 +616,7 @@ class AICompanion(discord.Client):
             self.openai_client = None
         self.conversation_manager = ConversationManager()
         self.rate_limiter = RateLimiter()
+        self.message_formatter = MessageFormatter()
         self.prompt_manager = SystemPromptManager()
 
 
