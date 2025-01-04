@@ -1,4 +1,4 @@
-# Discord AI Companion Bot
+# Aura: An AI bot for discord servers
 
 A Discord bot that uses a LLM to provide conversational AI interactions in both DMs, and specific channels in a server. The bot maintains conversation history and allows customization of system prompts, message limits etc..
 
