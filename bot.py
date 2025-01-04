@@ -511,7 +511,7 @@ class AICompanion(discord.Client):
                 
                 # Find the last !clear command
                 last_clear = None
-                async for msg in message.channel.history(limit=30, before=message):
+                async for msg in message.channel.history(limit=100, before=message):
                     if msg.content.strip() == '!clear':
                         last_clear = msg
                         break
