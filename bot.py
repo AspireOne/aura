@@ -155,21 +155,21 @@ class RateLimiter:
         self.rate_limits = {}
         self.messages_per_minute = messages_per_minute
 
-    def can_send(self, user_id: str) -> bool:
+    def can_send(self, conversation_id: str) -> bool:
         current_time = datetime.now()
-        if user_id not in self.rate_limits:
-            self.rate_limits[user_id] = deque(maxlen=self.messages_per_minute)
+        if conversation_id not in self.rate_limits:
+            self.rate_limits[conversation_id] = deque(maxlen=self.messages_per_minute)
             
-        while (self.rate_limits[user_id] and 
-               current_time - self.rate_limits[user_id][0] > timedelta(minutes=1)):
-            self.rate_limits[user_id].popleft()
+        while (self.rate_limits[conversation_id] and 
+               current_time - self.rate_limits[conversation_id][0] > timedelta(minutes=1)):
+            self.rate_limits[conversation_id].popleft()
             
-        return len(self.rate_limits[user_id]) < self.messages_per_minute
+        return len(self.rate_limits[conversation_id]) < self.messages_per_minute
 
-    def add_message(self, user_id: str):
-        if user_id not in self.rate_limits:
-            self.rate_limits[user_id] = deque(maxlen=self.messages_per_minute)
-        self.rate_limits[user_id].append(datetime.now())
+    def add_message(self, conversation_id: str):
+        if conversation_id not in self.rate_limits:
+            self.rate_limits[conversation_id] = deque(maxlen=self.messages_per_minute)
+        self.rate_limits[conversation_id].append(datetime.now())
 
 class ModelManager:
     def __init__(self):
@@ -325,13 +325,14 @@ class AICompanion(discord.Client):
         if message.author.bot:
             return
             
-        # Handle DMs, messages starting with ? or !, or messages mentioning "aura"/"auro"
+        # Handle DMs, messages starting with ? or !, messages mentioning "auro", or ending with "."
         is_dm = isinstance(message.channel, discord.DMChannel)
         is_question = not is_dm and message.content.startswith('?')
         is_command = not is_dm and message.content.startswith('!')
-        mentions_aura = not is_dm and ('aura' in message.content.lower() or 'auro' in message.content.lower())
+        mentions_aura = not is_dm and ('auro' in message.content.lower())
+        ends_with_dot = not is_dm and message.content.strip().endswith('.')
         
-        if not (is_dm or is_question or is_command or mentions_aura):
+        if not (is_dm or is_question or is_command or mentions_aura or ends_with_dot):
             return
             
         # Strip the ? prefix if it's a question
@@ -397,8 +398,8 @@ class AICompanion(discord.Client):
                         f"Messages in history: {stats['message_count']}\n"
                         f"Total characters: {stats['total_characters']}/{stats['max_characters']}\n"
                         f"System prompt: {self.prompt_manager.get_prompt(conversation_id)}\n"
-                        f"Provider: {self.provider_manager.get_provider(user_id)}\n"
-                        f"Model: {self.model_manager.get_model(user_id)}\n"
+                        f"Provider: {self.provider_manager.get_provider(conversation_id)}\n"
+                        f"Model: {self.model_manager.get_model(conversation_id)}\n"
                     )
                     if stats['last_interaction']:
                         last_time = datetime.fromisoformat(stats['last_interaction'])
@@ -424,8 +425,8 @@ class AICompanion(discord.Client):
                     elif provider == "openrouter" and not os.getenv('OPENROUTER_API_KEY'):
                         await message.channel.send(self.message_formatter.system_message("OPENROUTER_API_KEY not found in environment!"))
                         return
-                    self.provider_manager.save_provider(str(message.author.id), provider)
-                    await message.channel.send(self.message_formatter.system_message(f"AI provider updated to {provider}!"))
+                    self.provider_manager.save_provider(conversation_id, provider)
+                    await message.channel.send(self.message_formatter.system_message(f"{'Channel' if not is_dm else 'Personal'} AI provider updated to {provider}!"))
                 except Exception as e:
                     logging.error(f"Error setting provider: {str(e)}")
                     await message.channel.send(self.message_formatter.system_message("An error occurred while updating the provider. Please try again."))
@@ -437,8 +438,8 @@ class AICompanion(discord.Client):
                     return
                 model = args[0]
                 try:
-                    self.model_manager.save_model(str(message.author.id), model)
-                    await message.channel.send(self.message_formatter.system_message(f"AI model updated to {model}!"))
+                    self.model_manager.save_model(conversation_id, model)
+                    await message.channel.send(self.message_formatter.system_message(f"{'Channel' if not is_dm else 'Personal'} AI model updated to {model}!"))
                 except Exception as e:
                     logging.error(f"Error setting model: {str(e)}")
                     await message.channel.send(self.message_formatter.system_message("An error occurred while updating the model. Please try again."))
@@ -548,12 +549,17 @@ class AICompanion(discord.Client):
                 logging.error(f"Error fetching channel history: {str(e)}")
 
         # Handle message content
+        # Remove trailing dot if that's what triggered the response
+        message_content = message.content
+        if ends_with_dot and message_content.strip().endswith('.'):
+            message_content = message_content.rstrip('.')
+
         if message.attachments and any(att.content_type.startswith('image/') for att in message.attachments):
             # If there are images, create a content array
             content = []
             # Add any text message first if it exists
-            if message.content.strip():
-                content.append({"type": "text", "text": message.content.strip()})
+            if message_content.strip():
+                content.append({"type": "text", "text": message_content.strip()})
             # Add each image
             for attachment in message.attachments:
                 if attachment.content_type.startswith('image/'):
@@ -566,7 +572,7 @@ class AICompanion(discord.Client):
                     })
         else:
             # Regular text message
-            content = message.content
+            content = message_content
 
         # Add user message to conversation with username
         display_name = f"{message.author.name}#{message.author.discriminator}" if message.author.discriminator != '0' else message.author.name
@@ -587,7 +593,7 @@ class AICompanion(discord.Client):
                 ai_response = await self.process_message(
                     message,
                     self.conversation_manager.get_conversation(conversation_id),
-                    str(message.author.id),  # Still use actual user_id for model/provider settings
+                    conversation_id,  # Use conversation_id for model/provider settings
                     conversation_id  # Pass conversation_id for prompt lookup
                 )
             
