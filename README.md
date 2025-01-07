@@ -2,6 +2,12 @@
 
 A Discord bot that uses a LLM to provide conversational AI interactions in both DMs, and specific channels in a server. The bot maintains conversation history and allows customization of system prompts, message limits etc..
 
+| Roleplay | Play games |
+|:--------:|:----------:|
+| ![image](https://github.com/user-attachments/assets/cb7ffff0-ded8-49f0-bb45-7ab535c75895) | ![image](https://github.com/user-attachments/assets/52b679d1-7e78-4715-8f38-25708ce9728e) |
+
+
+
 ## Features
 
 - Private conversations in DMs
