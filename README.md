@@ -81,7 +81,7 @@ A Discord bot that uses a LLM to provide conversational AI interactions in both 
 
 5. Run the bot:
    ```bash
-   python bot.py
+   python -m core.bot
    ```
 
 ## Usage
