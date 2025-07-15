@@ -12,6 +12,7 @@ from core.config import (
     OPENROUTER_API_KEY,
 )
 from core.services import AIService
+from core.image_service import ImageService
 from utils.persistence import (
     ConversationManager,
     RateLimiter,
@@ -61,6 +62,7 @@ async def main():
         model_manager=model_manager,
         provider_manager=provider_manager
     )
+    image_service = ImageService()
 
     # --- Load Cogs ---
     # Manually add cogs and pass dependencies
@@ -80,6 +82,7 @@ async def main():
             rate_limiter,
             ai_service,
             prompt_manager,
+            image_service,
         )
     )
 

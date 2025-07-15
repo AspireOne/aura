@@ -29,23 +29,18 @@ class AIService:
             config = self._get_client_config(context_id)
             client = AsyncOpenAI(**config)
 
-            filtered_history = [
-                msg for msg in conversation_history
-                if not (isinstance(msg.get("content"), str) and "[SYS]" in msg["content"])
-            ]
-
             # Ensure messages are in the correct format for the API
             api_messages: list[ChatCompletionMessageParam] = [
                 {"role": "system", "content": system_prompt}
             ]
-            for msg in filtered_history:
+            for msg in conversation_history:
                 # The 'role' key must be present and correctly typed.
-                # We assume 'content' is always present.
+                # We assume 'content' is always present and a string.
                 role = msg.get("role")
                 if role in ["user", "assistant", "system"]:
                     api_messages.append({
                         "role": role,
-                        "content": msg["content"]
+                        "content": str(msg["content"])  # Ensure content is a string
                     })
 
             logging.info("Context being sent to LLM:")

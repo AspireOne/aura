@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 
 from core.services import AIService
+from core.image_service import ImageService
 from utils.persistence import ConversationManager, RateLimiter, SettingsManager
 from utils.formatting import system_message, strip_diacritics
 from utils.context import get_conversation_id
@@ -11,21 +12,23 @@ from utils.context import get_conversation_id
 class EventsCog(commands.Cog):
     def __init__(self, bot: commands.Bot, conversation_manager: ConversationManager,
                  rate_limiter: RateLimiter, ai_service: AIService,
-                 prompt_manager: SettingsManager):
+                 prompt_manager: SettingsManager, image_service: ImageService):
         self.bot = bot
         self.conversation_manager = conversation_manager
         self.rate_limiter = rate_limiter
         self.ai_service = ai_service
         self.prompt_manager = prompt_manager
+        self.image_service = image_service
 
     @commands.Cog.listener()
     async def on_ready(self):
         if self.bot.user:
             logging.info(f'Logged in as {self.bot.user.name}')
-            await self.bot.change_presence(activity=discord.Activity(
-                type=discord.ActivityType.listening,
-                name="DMs | try !help"
-            ))
+            # Remove presence for now.
+            # await self.bot.change_presence(activity=discord.Activity(
+            #     type=discord.ActivityType.listening,
+            #     name="DMs | try !help"
+            # ))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -62,7 +65,7 @@ class EventsCog(commands.Cog):
                     await self._fetch_and_rebuild_channel_history(message, conversation_id)
 
                 # --- Prepare User Message ---
-                user_content = self._prepare_user_message(message, is_question, ends_with_dot)
+                user_content = await self._prepare_user_message(message, is_question, ends_with_dot)
                 
                 self.conversation_manager.add_message(
                     conversation_id,
@@ -135,40 +138,34 @@ class EventsCog(commands.Cog):
         except Exception as e:
             logging.error(f"Error fetching channel history: {str(e)}")
 
-    def _prepare_user_message(self, message: discord.Message, is_question: bool, ends_with_dot: bool):
+    async def _prepare_user_message(self, message: discord.Message, is_question: bool, ends_with_dot: bool):
         message_content = message.content
         if is_question:
             message_content = message_content[1:].strip()
         if ends_with_dot and message_content.strip().endswith('.'):
             message_content = message_content.rstrip('.')
 
-        content = []
+        image_descriptions = []
         if message.attachments:
-            # Filter attachments to only include those with a valid content_type
             image_attachments = [
                 att for att in message.attachments
                 if att.content_type and att.content_type.startswith('image/')
             ]
-            if image_attachments:
-                content = []
-                if message_content.strip():
-                    content.append({"type": "text", "text": message_content.strip()})
-                for attachment in image_attachments:
-                    content.append({
-                        "type": "image_url",
-                        "image_url": {"detail": "high", "url": attachment.url},
-                    })
-        else:
-            content = message_content
+            for attachment in image_attachments:
+                try:
+                    description = await self.image_service.describe_image(attachment.url)
+                    image_descriptions.append(f"[Image description: {description}]")
+                except Exception as e:
+                    logging.error(f"Failed to describe image {attachment.url}: {e}")
+                    image_descriptions.append("[Image description: Failed to analyze image.]")
+
+        full_message = message_content
+        if image_descriptions:
+            full_message += " " + " ".join(image_descriptions)
 
         display_name = f"{message.author.name}#{message.author.discriminator}" if message.author.discriminator != '0' else message.author.name
-        if isinstance(content, list):
-            if content and content[0]["type"] == "text":
-                content[0]["text"] = f"[{display_name}]: {content[0]['text']}"
-        else:
-            content = f"[{display_name}]: {content}"
         
-        return content
+        return f"[{display_name}]: {full_message.strip()}"
 
     def _process_ai_response(self, ai_response: str) -> str:
         response = ai_response.lstrip()
