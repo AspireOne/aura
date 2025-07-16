@@ -128,7 +128,8 @@ class EventsCog(commands.Cog):
                 # Add a null check for self.bot.user
                 role = "assistant" if self.bot.user and msg.author.id == self.bot.user.id else "user"
                 display_name = f"{msg.author.name}#{msg.author.discriminator}" if msg.author.discriminator != '0' else msg.author.name
-                prefixed_content = f"[{display_name}]: {content}"
+                # TODO: Apply the display name prefix ONLY IF IN GROUP CHANNEL. Not in DMs. Currently it will apply never, so the AI will not know who is speaking in a group chat.
+                prefixed_content = f"{content}" #f"[{display_name}]: {content}"
                 channel_history.append({"role": role, "content": prefixed_content})
                 total_chars += msg_size
 
