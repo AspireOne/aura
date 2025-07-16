@@ -50,15 +50,16 @@ class CommandsCog(commands.Cog):
         stats = self.conversation_manager.get_stats(conversation_id)
         is_dm = isinstance(ctx.channel, discord.DMChannel)
         approx_tokens = round(stats['total_characters'] / 4)
+        system_prompt_formatted = f"System prompt: {self.prompt_manager.get_setting(conversation_id)}\n"[:1000]
         
         info_message = (
             f"**{'Personal' if is_dm else 'Channel'} Conversation Statistics**\n"
             f"Messages in history: {stats['message_count']}\n"
             f"Total characters: {stats['total_characters']}/{stats['max_characters']} (~{approx_tokens} tokens)\n"
-            f"System prompt: {self.prompt_manager.get_setting(conversation_id)}\n"
+            f"{system_prompt_formatted}"
             f"Provider: {self.provider_manager.get_setting(conversation_id)}\n"
             f"Model: {self.model_manager.get_setting(conversation_id)}\n"
-        )
+        )[:1999]
         if stats['last_interaction']:
             last_time = datetime.fromisoformat(stats['last_interaction'])
             info_message += f"Last interaction: {last_time.strftime('%Y-%m-%d %H:%M:%S')}"
