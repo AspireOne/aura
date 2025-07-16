@@ -22,8 +22,8 @@ class CommandsCog(commands.Cog):
     @commands.command(name='prompt')
     async def set_prompt(self, ctx: commands.Context, *, new_prompt: str):
         """Set a new system prompt."""
-        if len(new_prompt) > 1000:
-            await ctx.send(system_message("Prompt is too long! Please keep it under 1000 characters."))
+        if len(new_prompt) > 100000:
+            await ctx.send(system_message("Prompt is too long."))
             return
         if not new_prompt.strip():
             await ctx.send(system_message("Prompt cannot be empty!"))
